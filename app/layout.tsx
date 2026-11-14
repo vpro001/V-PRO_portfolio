@@ -5,7 +5,7 @@ import AuthProvider from "@/components/AuthProvider";
 import { site } from "@/lib/site";
 
 const display = localFont({
-  src: "./fonts/bricolage-grotesque.ttf",
+  src: "../public/fonts/bricolage-grotesque.ttf",
   variable: "--font-display-face",
   weight: "400 800",
   display: "swap",
@@ -14,12 +14,12 @@ const display = localFont({
 const serif = localFont({
   src: [
     {
-      path: "./fonts/instrument-serif-regular.ttf",
+      path: "../public/fonts/instrument-serif-regular.ttf",
       weight: "400",
       style: "normal",
     },
     {
-      path: "./fonts/instrument-serif-italic.ttf",
+      path: "../public/fonts/instrument-serif-italic.ttf",
       weight: "400",
       style: "italic",
     },
@@ -29,14 +29,14 @@ const serif = localFont({
 });
 
 const body = localFont({
-  src: "./fonts/geist.ttf",
+  src: "../public/fonts/geist.ttf",
   variable: "--font-body",
   weight: "100 900",
   display: "swap",
 });
 
 const mono = localFont({
-  src: "./fonts/jetbrains-mono.ttf",
+  src: "../public/fonts/jetbrains-mono.ttf",
   variable: "--font-mono-face",
   weight: "100 800",
   display: "swap",

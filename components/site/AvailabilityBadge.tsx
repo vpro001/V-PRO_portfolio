@@ -7,7 +7,7 @@ export default function AvailabilityBadge() {
     <Link
       href="/contact"
       aria-label="Available for new projects — get in touch"
-      className="group relative flex h-28 w-28 items-center justify-center rounded-full bg-accent text-on-accent md:h-36 md:w-36"
+      className="group relative flex h-28 w-28 items-center overflow-hidden justify-center rounded-full bg-accent text-on-accent md:h-36 md:w-36"
     >
       <svg viewBox="0 0 100 100" className="absolute inset-0 animate-turn" aria-hidden="true">
         <defs>
