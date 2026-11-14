@@ -66,6 +66,26 @@ export const viewport: Viewport = {
   ],
 };
 
+// On a flaky connection a script file can fail mid-download, leaving the page
+// half-working. Reload once to recover (at most once a minute, so a genuinely
+// offline visitor is never stuck in a reload loop).
+const chunkRetryScript = `(function () {
+  function recover(reason) {
+    var text = String((reason && (reason.name + " " + reason.message)) || reason || "");
+    if (!/ChunkLoadError|Loading chunk|Loading CSS chunk/i.test(text)) return;
+    try {
+      var last = Number(sessionStorage.getItem("chunk-retry") || 0);
+      if (Date.now() - last < 60000) return;
+      sessionStorage.setItem("chunk-retry", String(Date.now()));
+    } catch (e) {
+      return;
+    }
+    location.reload();
+  }
+  window.addEventListener("error", function (e) { recover(e.error || e.message); });
+  window.addEventListener("unhandledrejection", function (e) { recover(e.reason); });
+})();`;
+
 // Applies the saved theme before first paint.
 const themeScript = `try {
   var t = localStorage.getItem("theme");
@@ -86,6 +106,7 @@ export default function RootLayout({
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        <script dangerouslySetInnerHTML={{ __html: chunkRetryScript }} />
       </head>
       <body>
         <a

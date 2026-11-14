@@ -8,7 +8,7 @@ export const site = {
   lastName: "Ikechukwu",
   brand: "V-PRO",
   brandFull: "V-PRO Services",
-  role: "Full-stack developer & instructor",
+  role: "Full-stack developer & Mentor",
   location: "Port Harcourt, Nigeria",
   timeZone: "Africa/Lagos",
   timeZoneLabel: "WAT",
@@ -20,7 +20,7 @@ export const site = {
   intro:
     "I'm a full-stack developer working out of Port Harcourt. Most of my work is the unglamorous middle of a product: the data model, the auth, the payment flow, the admin panel someone has to use every day. I build it in Laravel or Next.js, and I write courses about the parts that took me longest to learn.",
   socials: [
-    { label: "GitHub", handle: "Victor070656", href: "https://github.com/Victor070656" },
+    { label: "GitHub", handle: "Victor070656", href: "https://github.com/vpro001" },
     { label: "LinkedIn", handle: "victorikechukwu", href: "https://linkedin.com/in/victorikechukwu" },
     { label: "X / Twitter", handle: "@victor10722752", href: "https://x.com/victor10722752" },
   ],
