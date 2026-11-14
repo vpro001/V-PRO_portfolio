@@ -1,4 +1,3 @@
-
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
@@ -6,7 +5,7 @@ import AuthProvider from "@/components/AuthProvider";
 import { site } from "@/lib/site";
 
 const display = localFont({
-  src: "./fonts/bricolage-grotesque.woff2",
+  src: "./fonts/bricolage-grotesque.ttf",
   variable: "--font-display-face",
   weight: "400 800",
   display: "swap",
@@ -15,12 +14,12 @@ const display = localFont({
 const serif = localFont({
   src: [
     {
-      path: "./fonts/instrument-serif-regular.woff2",
+      path: "./fonts/instrument-serif-regular.ttf",
       weight: "400",
       style: "normal",
     },
     {
-      path: "./fonts/instrument-serif-italic.woff2",
+      path: "./fonts/instrument-serif-italic.ttf",
       weight: "400",
       style: "italic",
     },
@@ -30,14 +29,14 @@ const serif = localFont({
 });
 
 const body = localFont({
-  src: "./fonts/geist.woff2",
+  src: "./fonts/geist.ttf",
   variable: "--font-body",
   weight: "100 900",
   display: "swap",
 });
 
 const mono = localFont({
-  src: "./fonts/jetbrains-mono.woff2",
+  src: "./fonts/jetbrains-mono.ttf",
   variable: "--font-mono-face",
   weight: "100 800",
   display: "swap",
@@ -46,9 +45,7 @@ const mono = localFont({
 const description = `${site.name} — ${site.role.toLowerCase()} in ${site.location}. ${site.tagline}`;
 
 export const metadata: Metadata = {
-  metadataBase: new URL(
-    process.env.NEXTAUTH_URL || "http://localhost:3000"
-  ),
+  metadataBase: new URL(process.env.NEXTAUTH_URL || "http://localhost:3000"),
   title: {
     default: `${site.name} — ${site.role}`,
     template: `%s — ${site.name}`,
