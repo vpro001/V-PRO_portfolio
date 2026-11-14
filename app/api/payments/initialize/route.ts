@@ -1,127 +1,64 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
-import clientPromise from "@/lib/mongodb";
-import { flutterwaveService } from "@/lib/flutterwave";
-import { ObjectId } from "mongodb";
+import { createCheckout, paymentsConfigured } from "@/lib/flutterwave";
+import { getDb } from "@/lib/mongodb";
+import { json, requireUser, toObjectId } from "@/lib/session";
+import { body } from "@/lib/validate";
 
-export async function POST(request: NextRequest) {
+export async function POST(request: Request) {
+  const user = await requireUser();
+  if (user instanceof Response) return user;
+  if (user.role !== "student") return json.error("Sign in with a student account to enrol.", 403);
+
+  const courseId = toObjectId((await body(request)).courseId);
+  if (!courseId) return json.error("Unknown course.");
+  const userId = toObjectId(user.id)!;
+
   try {
-    const session = await getServerSession(authOptions);
+    const db = await getDb();
+    const course = await db.collection("courses").findOne({ _id: courseId, isPublished: true });
+    if (!course) return json.error("Course not found.", 404);
 
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const price = Number(course.price) || 0;
+    if (price <= 0) return json.error("This course is free — no payment needed.");
+
+    if (await db.collection("enrollments").findOne({ userId, courseId })) {
+      return json.ok({ alreadyEnrolled: true });
     }
 
-    const { courseId, paymentMethod } = await request.json();
-
-    if (!courseId) {
-      return NextResponse.json(
-        { error: "Course ID is required" },
-        { status: 400 }
+    if (!paymentsConfigured()) {
+      return json.error(
+        "Online payment isn't switched on yet. Please get in touch and I'll enrol you manually.",
+        503
       );
     }
 
-    const client = await clientPromise;
-    const db = client.db();
+    const student = await db.collection("students").findOne({ _id: userId });
+    if (!student) return json.error("Account not found. Please sign in again.", 401);
 
-    // Get course details
-    const course = await db.collection("courses").findOne({
-      _id: new ObjectId(courseId),
-      isPublished: true
+    const origin = (process.env.NEXTAUTH_URL || new URL(request.url).origin).replace(/\/$/, "");
+    const checkout = await createCheckout({
+      amount: price,
+      email: student.email,
+      name: user.name,
+      phone: student.profile?.phone,
+      title: course.title,
+      redirectUrl: `${origin}/courses/${courseId}/payment/success`,
+      logoUrl: origin.startsWith("https://") ? `${origin}/logo.png` : undefined,
+    });
+    if (!checkout.ok) return json.error(checkout.error, 502);
+
+    await db.collection("payment_initializations").insertOne({
+      userId,
+      courseId,
+      txRef: checkout.txRef,
+      amount: price,
+      currency: "NGN",
+      status: "initialized",
+      createdAt: new Date(),
     });
 
-    if (!course) {
-      return NextResponse.json({ error: "Course not found" }, { status: 404 });
-    }
-
-    // Check if already enrolled
-    const existingEnrollment = await db.collection("enrollments").findOne({
-      userId: new ObjectId((session.user as any).id),
-      courseId: new ObjectId(courseId)
-    });
-
-    if (existingEnrollment) {
-      return NextResponse.json(
-        { error: "Already enrolled in this course" },
-        { status: 400 }
-      );
-    }
-
-    // Get user details - check both users and students collections based on role
-    const userRole = (session.user as any).role || 'student';
-    const collection = userRole === "admin" ? "users" : "students";
-
-    console.log(`Looking for user in ${collection} collection with ID: ${(session.user as any).id}`);
-
-    const user = await db.collection(collection).findOne({
-      _id: new ObjectId((session.user as any).id)
-    });
-
-    if (!user) {
-      console.error(`User not found in ${collection} collection. Session:`, session);
-      return NextResponse.json({
-        error: "User not found",
-        debug: {
-          userId: (session.user as any).id,
-          role: userRole,
-          collection: collection
-        }
-      }, { status: 404 });
-    }
-
-    // Skip payment for free courses
-    if (course.price === 0) {
-      return NextResponse.json({
-        success: true,
-        freeCourse: true,
-        message: "Free course - no payment required"
-      });
-    }
-
-    // Initialize Flutterwave payment
-    const userName = user.name || user.username || `${user.profile?.firstName || ''} ${user.profile?.lastName || ''}`.trim();
-    const paymentResult = await flutterwaveService.initializePayment({
-      email: user.email,
-      name: userName,
-      phone: user.profile?.phone,
-      courseId: courseId,
-      userId: (session.user as any).id,
-      courseTitle: course.title,
-      amount: course.price,
-      redirectUrl: `${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/courses/${courseId}/payment/success`
-    });
-
-    if (paymentResult.success && paymentResult.data) {
-      // Store payment initialization record
-      await db.collection("payment_initializations").insertOne({
-        userId: new ObjectId((session.user as any).id),
-        courseId: new ObjectId(courseId),
-        txRef: paymentResult.data.tx_ref,
-        amount: course.price,
-        paymentMethod,
-        status: "initialized",
-        createdAt: new Date()
-      });
-
-      return NextResponse.json({
-        success: true,
-        paymentUrl: paymentResult.data.link,
-        txRef: paymentResult.data.tx_ref,
-        amount: course.price,
-        courseTitle: course.title
-      });
-    } else {
-      return NextResponse.json(
-        { error: paymentResult.error || "Payment initialization failed" },
-        { status: 500 }
-      );
-    }
+    return json.ok({ paymentUrl: checkout.link });
   } catch (error) {
-    console.error("Payment initialization error:", error);
-    return NextResponse.json(
-      { error: "Payment service unavailable" },
-      { status: 500 }
-    );
+    console.error("[payments/initialize]", error);
+    return json.error("Checkout couldn't be started. Please try again.", 500);
   }
 }

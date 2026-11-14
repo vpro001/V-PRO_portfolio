@@ -1,265 +1,120 @@
 "use client";
 
-import { useState } from "react";
+import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import VideoUploader from "./VideoUploader";
+import { useState } from "react";
+import { api } from "@/lib/client";
+import type { CourseDTO } from "@/lib/types";
 
-interface CourseFormProps {
-  initialData?: any;
-  isEdit?: boolean;
-}
-
-export default function CourseForm({ initialData, isEdit = false }: CourseFormProps) {
+/** Create a course (no `course`) or edit its details. Lessons are managed separately. */
+export default function CourseForm({ course }: { course?: CourseDTO }) {
   const router = useRouter();
-  const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState(
-    initialData || {
-      title: "",
-      description: "",
-      price: 0,
-      category: "",
-      level: "beginner",
-      language: "English",
-      thumbnail: "",
-      previewVideoUrl: "",
-      requirements: [""],
-      objectives: [""],
-      instructor: {
-        name: "",
-        bio: "",
-      },
-    }
-  );
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
-  ) => {
-    const { name, value } = e.target;
-    if (name.includes(".")) {
-      const [parent, child] = name.split(".");
-      setFormData((prev: any) => ({
-        ...prev,
-        [parent]: {
-          ...prev[parent],
-          [child]: value,
-        },
-      }));
-    } else {
-      setFormData((prev: any) => ({ ...prev, [name]: value }));
-    }
-  };
-
-  const handleArrayChange = (index: number, value: string, field: "requirements" | "objectives") => {
-    const updated = [...formData[field]];
-    updated[index] = value;
-    setFormData((prev: any) => ({ ...prev, [field]: updated }));
-  };
-
-  const addArrayItem = (field: "requirements" | "objectives") => {
-    setFormData((prev: any) => ({ ...prev, [field]: [...prev[field], ""] }));
-  };
-
-  const removeArrayItem = (index: number, field: "requirements" | "objectives") => {
-    const updated = [...formData[field]];
-    updated.splice(index, 1);
-    setFormData((prev: any) => ({ ...prev, [field]: updated.length ? updated : [""] }));
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-
+  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(event.currentTarget));
+    setBusy(true);
+    setMessage(null);
     try {
-      const url = isEdit ? `/api/admin/courses/${initialData._id}` : "/api/admin/courses";
-      const method = isEdit ? "PUT" : "POST";
-
-      const res = await fetch(url, {
-        method,
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(formData),
-      });
-
-      if (res.ok) {
-        router.push("/admin/courses");
+      if (course) {
+        await api(`/api/admin/courses/${course.id}`, "PUT", values);
+        setMessage({ ok: true, text: "Course details saved." });
         router.refresh();
       } else {
-        alert("Something went wrong");
+        const { id } = await api<{ id: string }>("/api/admin/courses", "POST", values);
+        router.push(`/admin/courses/${id}`);
+        router.refresh();
+        return;
       }
-    } catch (error) {
-      console.error("Error submitting form:", error);
-      alert("Error submitting form");
-    } finally {
-      setLoading(false);
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : "The course couldn't be saved." });
     }
-  };
+    setBusy(false);
+  }
 
   return (
-    <form onSubmit={handleSubmit} className="arch-panel p-8 space-y-8">
-      <section className="space-y-4">
-        <p className="arch-kicker">Basic Information</p>
-        <div className="grid gap-4 md:grid-cols-2">
-          <input
-            type="text"
-            name="title"
-            value={formData.title}
-            onChange={handleChange}
-            className="arch-input"
-            placeholder="Course title"
-            required
-          />
-          <input
-            type="text"
-            name="category"
-            value={formData.category}
-            onChange={handleChange}
-            className="arch-input"
-            placeholder="Category"
-          />
-          <input
-            type="number"
-            name="price"
-            value={formData.price}
-            onChange={handleChange}
-            className="arch-input"
-            min="0"
-            step="0.01"
-            placeholder="Price"
-          />
-          <select name="level" value={formData.level} onChange={handleChange} className="arch-input">
+    <form onSubmit={onSubmit} className="panel space-y-6 p-6 md:p-8">
+      <div>
+        <label htmlFor="title" className="label">Title</label>
+        <input id="title" name="title" required maxLength={160} defaultValue={course?.title} className="field" placeholder="e.g. Laravel APIs from first route to production" />
+      </div>
+
+      <div>
+        <label htmlFor="description" className="label">Description</label>
+        <textarea id="description" name="description" required rows={5} maxLength={6000} defaultValue={course?.description} className="field" />
+        <p className="hint">Shown at the top of the course page. Say what gets built and who it&rsquo;s for.</p>
+      </div>
+
+      <div className="grid gap-6 sm:grid-cols-3">
+        <div>
+          <label htmlFor="category" className="label">Category</label>
+          <input id="category" name="category" required maxLength={60} defaultValue={course?.category} className="field" placeholder="Backend" />
+        </div>
+        <div>
+          <label htmlFor="level" className="label">Level</label>
+          <select id="level" name="level" defaultValue={course?.level || "beginner"} className="field">
             <option value="beginner">Beginner</option>
             <option value="intermediate">Intermediate</option>
             <option value="advanced">Advanced</option>
           </select>
         </div>
-        <textarea
-          name="description"
-          value={formData.description}
-          onChange={handleChange}
-          rows={4}
-          className="arch-input"
-          placeholder="Description"
-          required
-        />
-      </section>
-
-      <section className="space-y-4">
-        <p className="arch-kicker">Media</p>
-        <input
-          type="text"
-          name="thumbnail"
-          value={formData.thumbnail}
-          onChange={handleChange}
-          className="arch-input"
-          placeholder="Thumbnail URL"
-        />
-        <VideoUploader
-          label="Preview Video URL (YouTube/Drive)"
-          value={formData.previewVideoUrl || ""}
-          onChange={(url) => setFormData((prev: any) => ({ ...prev, previewVideoUrl: url }))}
-        />
-      </section>
-
-      <section className="space-y-4">
-        <p className="arch-kicker">Learning Outcomes</p>
-        <ArrayField
-          label="Objectives"
-          values={formData.objectives}
-          field="objectives"
-          onChange={handleArrayChange}
-          onAdd={addArrayItem}
-          onRemove={removeArrayItem}
-        />
-        <ArrayField
-          label="Requirements"
-          values={formData.requirements}
-          field="requirements"
-          onChange={handleArrayChange}
-          onAdd={addArrayItem}
-          onRemove={removeArrayItem}
-        />
-      </section>
-
-      <section className="space-y-4">
-        <p className="arch-kicker">Instructor</p>
-        <div className="grid gap-4 md:grid-cols-2">
-          <input
-            type="text"
-            name="instructor.name"
-            value={formData.instructor.name}
-            onChange={handleChange}
-            className="arch-input"
-            placeholder="Instructor name"
-          />
-          <input
-            type="text"
-            name="language"
-            value={formData.language}
-            onChange={handleChange}
-            className="arch-input"
-            placeholder="Language"
-          />
+        <div>
+          <label htmlFor="language" className="label">Language</label>
+          <input id="language" name="language" maxLength={40} defaultValue={course?.language || "English"} className="field" />
         </div>
-        <textarea
-          name="instructor.bio"
-          value={formData.instructor.bio}
-          onChange={handleChange}
-          rows={3}
-          className="arch-input"
-          placeholder="Instructor bio"
-        />
-      </section>
-
-      <div className="flex justify-end">
-        <button type="submit" disabled={loading} className="arch-button">
-          {loading ? "Saving..." : isEdit ? "Update Course" : "Create Course"}
-        </button>
       </div>
-    </form>
-  );
-}
 
-function ArrayField({
-  label,
-  values,
-  field,
-  onChange,
-  onAdd,
-  onRemove,
-}: {
-  label: string;
-  values: string[];
-  field: "requirements" | "objectives";
-  onChange: (index: number, value: string, field: "requirements" | "objectives") => void;
-  onAdd: (field: "requirements" | "objectives") => void;
-  onRemove: (index: number, field: "requirements" | "objectives") => void;
-}) {
-  return (
-    <div>
-      <label className="block text-sm text-muted-foreground mb-2">{label}</label>
-      <div className="space-y-2">
-        {values.map((value, index) => (
-          <div key={`${field}-${index}`} className="flex gap-2">
-            <input
-              type="text"
-              value={value}
-              onChange={(e) => onChange(index, e.target.value, field)}
-              className="arch-input"
-            />
-            <button
-              type="button"
-              onClick={() => onRemove(index, field)}
-              className="arch-button-secondary !px-3"
-            >
-              Remove
-            </button>
-          </div>
-        ))}
+      <div className="grid gap-6 sm:grid-cols-2">
+        <div>
+          <label htmlFor="price" className="label">Price (₦)</label>
+          <input id="price" name="price" type="number" min={0} step="any" inputMode="decimal" defaultValue={course?.price ?? 0} className="field tabular" aria-describedby="price-hint" />
+          <p id="price-hint" className="hint">Enter 0 to make the course free.</p>
+        </div>
+        <div>
+          <label htmlFor="originalPrice" className="label">Original price (₦) <span className="font-normal text-dim">(optional)</span></label>
+          <input id="originalPrice" name="originalPrice" type="number" min={0} step="any" inputMode="decimal" defaultValue={course?.originalPrice || ""} className="field tabular" aria-describedby="original-hint" />
+          <p id="original-hint" className="hint">If higher than the price, it&rsquo;s shown struck through.</p>
+        </div>
       </div>
-      <button type="button" onClick={() => onAdd(field)} className="mt-2 text-sm text-primary hover:underline">
-        + Add {label.slice(0, -1)}
+
+      <div className="grid gap-6 sm:grid-cols-2">
+        <div>
+          <label htmlFor="thumbnail" className="label">Cover image URL <span className="font-normal text-dim">(optional)</span></label>
+          <input id="thumbnail" name="thumbnail" type="url" defaultValue={course?.thumbnail} className="field" placeholder="https://…" aria-describedby="thumb-hint" />
+          <p id="thumb-hint" className="hint">Leave empty and a cover is generated from the title.</p>
+        </div>
+        <div>
+          <label htmlFor="previewVideoUrl" className="label">Trailer video URL <span className="font-normal text-dim">(optional)</span></label>
+          <input id="previewVideoUrl" name="previewVideoUrl" type="url" defaultValue={course?.previewVideoUrl} className="field" placeholder="https://youtube.com/watch?v=…" aria-describedby="trailer-hint" />
+          <p id="trailer-hint" className="hint">Public — anyone can watch it before enrolling.</p>
+        </div>
+      </div>
+
+      <div className="grid gap-6 sm:grid-cols-2">
+        <div>
+          <label htmlFor="objectives" className="label">What students will be able to do</label>
+          <textarea id="objectives" name="objectives" rows={5} defaultValue={course?.objectives.join("\n")} className="field" aria-describedby="objectives-hint" />
+          <p id="objectives-hint" className="hint">One per line.</p>
+        </div>
+        <div>
+          <label htmlFor="requirements" className="label">Requirements</label>
+          <textarea id="requirements" name="requirements" rows={5} defaultValue={course?.requirements.join("\n")} className="field" aria-describedby="requirements-hint" />
+          <p id="requirements-hint" className="hint">One per line.</p>
+        </div>
+      </div>
+
+      {message && (
+        <p className={`notice ${message.ok ? "notice-ok" : "notice-error"}`} role={message.ok ? "status" : "alert"}>
+          {message.text}
+        </p>
+      )}
+
+      <button type="submit" disabled={busy} className="btn btn-primary">
+        {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+        {course ? "Save details" : "Create course & add lessons"}
       </button>
-    </div>
+    </form>
   );
 }

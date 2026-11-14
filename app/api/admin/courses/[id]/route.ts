@@ -1,131 +1,70 @@
-import { NextResponse } from "next/server";
-import clientPromise from "@/lib/mongodb";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { ObjectId } from "mongodb";
+import { getDb } from "@/lib/mongodb";
+import { json, requireAdmin, toObjectId } from "@/lib/session";
+import { body, courseFields } from "@/lib/validate";
 
-export async function GET(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+type Ctx = { params: Promise<{ id: string }> };
+
+export async function PUT(request: Request, { params }: Ctx) {
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+  const _id = toObjectId((await params).id);
+  if (!_id) return json.error("Course not found.", 404);
+
+  const input = await body(request);
+
   try {
-    const session = await getServerSession(authOptions);
-    if (!session || session.user.role !== "admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const courses = (await getDb()).collection("courses");
+    const course = await courses.findOne({ _id });
+    if (!course) return json.error("Course not found.", 404);
+
+    // `{ isPublished }` on its own is the publish/unpublish toggle.
+    const onlyToggle = Object.keys(input).length === 1 && "isPublished" in input;
+    const fields = onlyToggle
+      ? { isPublished: Boolean(input.isPublished) }
+      : courseFields({ ...input, isPublished: input.isPublished ?? course.isPublished });
+
+    if (!onlyToggle) {
+      const full = fields as ReturnType<typeof courseFields>;
+      if (!full.title) return json.error("Give the course a title.");
+      if (!full.description) return json.error("Add a short description.");
     }
 
-    const { id } = await params;
-    const client = await clientPromise;
-    const db = client.db();
-    
-    const course = await db.collection("courses").findOne({ _id: new ObjectId(id) });
-
-    if (!course) {
-      return NextResponse.json({ error: "Course not found" }, { status: 404 });
+    if (fields.isPublished) {
+      const live = (course.lessons || []).filter(
+        (l: { isPublished?: boolean }) => l.isPublished !== false
+      );
+      if (!live.length) return json.error("Add at least one published lesson before publishing.");
     }
 
-    return NextResponse.json({ course });
+    await courses.updateOne({ _id }, { $set: { ...fields, updatedAt: new Date() } });
+    return json.ok({ success: true });
   } catch (error) {
-    console.error("Error fetching course:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    console.error("[admin/courses]", error);
+    return json.error("The course couldn't be saved.", 500);
   }
 }
 
-export async function PUT(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function DELETE(_request: Request, { params }: Ctx) {
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+  const _id = toObjectId((await params).id);
+  if (!_id) return json.error("Course not found.", 404);
+
   try {
-    const session = await getServerSession(authOptions);
-    if (!session || session.user.role !== "admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const db = await getDb();
+    const enrolled = await db.collection("enrollments").countDocuments({ courseId: _id });
+    if (enrolled > 0) {
+      return json.error(
+        `${enrolled} student${enrolled === 1 ? " is" : "s are"} enrolled. Unpublish the course instead, or remove the enrolments first.`,
+        409
+      );
     }
-
-    const { id } = await params;
-    const data = await req.json();
-    delete data._id; // Prevent updating _id
-
-    const client = await clientPromise;
-    const db = client.db();
-
-    const result = await db.collection("courses").updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { ...data, updatedAt: new Date() } }
-    );
-
-    if (result.matchedCount === 0) {
-      return NextResponse.json({ error: "Course not found" }, { status: 404 });
-    }
-
-    return NextResponse.json({ success: true });
+    const result = await db.collection("courses").deleteOne({ _id });
+    if (!result.deletedCount) return json.error("Course not found.", 404);
+    await db.collection("progress").deleteMany({ courseId: _id });
+    return json.ok({ success: true });
   } catch (error) {
-    console.error("Error updating course:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
-  }
-}
-
-export async function PATCH(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session || session.user.role !== "admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const { id } = await params;
-    const data = await req.json();
-    const client = await clientPromise;
-    const db = client.db();
-
-    // Only allow updating specific fields via PATCH (like isPublished)
-    const updateData: any = {};
-    if (typeof data.isPublished === 'boolean') {
-      updateData.isPublished = data.isPublished;
-    }
-    
-    updateData.updatedAt = new Date();
-
-    const result = await db.collection("courses").updateOne(
-      { _id: new ObjectId(id) },
-      { $set: updateData }
-    );
-
-    if (result.matchedCount === 0) {
-      return NextResponse.json({ error: "Course not found" }, { status: 404 });
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error("Error updating course:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
-  }
-}
-
-export async function DELETE(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session || session.user.role !== "admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const { id } = await params;
-    const client = await clientPromise;
-    const db = client.db();
-
-    const result = await db.collection("courses").deleteOne({ _id: new ObjectId(id) });
-
-    if (result.deletedCount === 0) {
-      return NextResponse.json({ error: "Course not found" }, { status: 404 });
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error("Error deleting course:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    console.error("[admin/courses]", error);
+    return json.error("The course couldn't be deleted.", 500);
   }
 }

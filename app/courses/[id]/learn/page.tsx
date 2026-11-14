@@ -1,359 +1,78 @@
-"use client";
-
-import { useState, useEffect } from "react";
-import { useParams, useSearchParams, useRouter } from "next/navigation";
-import { Course, Lesson } from "@/lib/models/course";
-import CourseSidebar from "@/components/course/CourseSidebar";
-import LessonContent from "@/components/course/LessonContent";
-import { Menu, X, Loader2, BookOpen } from "lucide-react";
+import type { Metadata } from "next";
 import Link from "next/link";
+import { notFound, redirect } from "next/navigation";
+import LearnClient from "@/components/courses/LearnClient";
+import SiteFrame from "@/components/site/SiteFrame";
+import { findCourse, findEnrollment, serializeCourse } from "@/lib/data";
+import { getDb } from "@/lib/mongodb";
+import { getSessionUser, toObjectId } from "@/lib/session";
 
-export default function LearnPage() {
-  const params = useParams();
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const courseId = params.id as string;
-  const lessonId = searchParams.get("lessonId");
+export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Learning", robots: { index: false } };
 
-  const [course, setCourse] = useState<Course | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [completedLessons, setCompletedLessons] = useState<string[]>([]);
-  const [currentLesson, setCurrentLesson] = useState<Lesson | null>(null);
-  const [hasRedirected, setHasRedirected] = useState(false);
+type Props = { params: Promise<{ id: string }>; searchParams: Promise<{ lesson?: string }> };
 
-  useEffect(() => {
-    let isMounted = true;
-    let fetchCompleted = false;
+export default async function LearnPage({ params, searchParams }: Props) {
+  const { id } = await params;
+  const { lesson: requested } = await searchParams;
 
-    const doFetch = async () => {
-      await fetchCourseData(isMounted);
-      fetchCompleted = true;
-    };
+  const user = await getSessionUser();
+  if (!user) redirect(`/auth/signin?callbackUrl=${encodeURIComponent(`/courses/${id}/learn`)}`);
 
-    doFetch();
+  const doc = await findCourse(id);
+  if (!doc) notFound();
 
-    // Timeout fallback
-    const timeout = setTimeout(() => {
-      if (isMounted && !fetchCompleted) {
-        console.error("Loading timeout - forcing error state");
-        setLoading(false);
-        setError("Loading timeout. Please try again.");
-      }
-    }, 10000); // 10 second timeout
+  const isAdmin = user.role === "admin";
+  const enrollment = isAdmin ? null : await findEnrollment(user.id, id);
+  // Students need an enrolment; nobody gets lesson videos without one.
+  if (!isAdmin && !enrollment) redirect(`/courses/${id}`);
 
-    return () => {
-      isMounted = false;
-      clearTimeout(timeout);
-    };
-  }, [courseId]);
+  const course = serializeCourse(doc, { withVideo: true, includeDrafts: isAdmin });
 
-  useEffect(() => {
-    console.log("Course state:", {
-      hasCourse: !!course,
-      lessonsCount: course?.lessons?.length,
-      lessonId,
-      hasRedirected,
-      currentLesson: !!currentLesson,
-    });
-
-    if (course && course.lessons && course.lessons.length > 0) {
-      if (!lessonId && !hasRedirected) {
-        // Redirect to first lesson if no lessonId provided
-        const firstLessonId = course.lessons[0]._id?.toString();
-        console.log("Redirecting to first lesson:", firstLessonId);
-        if (firstLessonId) {
-          setHasRedirected(true);
-          router.replace(
-            `/courses/${courseId}/learn?lessonId=${firstLessonId}`,
-          );
-        }
-      } else if (lessonId) {
-        const lesson = course.lessons.find(
-          (l) => l._id?.toString() === lessonId,
-        );
-        console.log("Found lesson:", !!lesson);
-        if (lesson) {
-          setCurrentLesson(lesson);
-        } else {
-          console.error("Lesson not found:", lessonId);
-          setError(`Lesson not found: ${lessonId}`);
-        }
-      }
-    }
-  }, [course, lessonId, courseId, router, hasRedirected]);
-
-  const fetchCourseData = async (isMounted = true) => {
-    try {
-      console.log("Fetching course:", courseId);
-
-      // Fetch course details
-      const courseRes = await fetch(`/api/courses/${courseId}`);
-      console.log("Course response status:", courseRes.status);
-
-      if (!courseRes.ok) {
-        throw new Error(`Failed to fetch course: ${courseRes.status}`);
-      }
-
-      const courseData = await courseRes.json();
-      console.log("Course data:", courseData);
-
-      if (isMounted) {
-        if (courseData.course) {
-          setCourse(courseData.course);
-
-          // Use enrollment data from course API response
-          if (courseData.enrollment) {
-            const completedIds =
-              courseData.enrollment.completedLessons?.map((id: any) =>
-                typeof id === "string" ? id : id.toString(),
-              ) || [];
-            setCompletedLessons(completedIds);
-          }
-        } else {
-          setError("Course not found");
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching course data:", error);
-      if (isMounted)
-        setError(
-          error instanceof Error ? error.message : "Failed to load course",
-        );
-    } finally {
-      if (isMounted) setLoading(false);
-    }
-  };
-
-  // Fetch specific lesson progress
-  useEffect(() => {
-    if (courseId && currentLesson?._id) {
-      fetchLessonProgress(currentLesson._id.toString());
-    }
-  }, [courseId, currentLesson]);
-
-  const [initialProgress, setInitialProgress] = useState(0);
-
-  const fetchLessonProgress = async (lessonId: string) => {
-    try {
-      const res = await fetch(
-        `/api/courses/${courseId}/lessons/${lessonId}/progress`,
-      );
-      if (res.ok) {
-        const data = await res.json();
-        if (data.progress?.lastPosition) {
-          setInitialProgress(data.progress.lastPosition);
-        } else {
-          setInitialProgress(0);
-        }
-      }
-    } catch (error) {
-      console.error("Error fetching lesson progress:", error);
-    }
-  };
-
-  const handleLessonComplete = async (completedLessonId: string) => {
-    try {
-      // Optimistic update
-      if (!completedLessons.includes(completedLessonId)) {
-        setCompletedLessons((prev) => [...prev, completedLessonId]);
-      }
-
-      // API call to update progress
-      await fetch(
-        `/api/courses/${courseId}/lessons/${completedLessonId}/progress`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ completed: true }),
-        },
-      );
-    } catch (error) {
-      console.error("Error updating progress:", error);
-    }
-  };
-
-  if (loading) {
+  if (!course.lessons.length) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
-          <p className="text-slate-600 dark:text-slate-400">
-            Loading course...
+      <SiteFrame cta={false}>
+        <div className="shell py-24">
+          <p className="eyebrow">{course.title}</p>
+          <h1 className="display mt-6 text-5xl md:text-7xl">Lessons are on the way.</h1>
+          <p className="mt-6 max-w-xl text-lg text-dim">
+            You&rsquo;re enrolled, but no lessons have been published yet. They&rsquo;ll appear here
+            as soon as they&rsquo;re ready.
           </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <div className="text-center">
-          <h2 className="text-2xl font-bold mb-2 text-slate-900 dark:text-white">
-            Error Loading Course
-          </h2>
-          <p className="text-slate-600 dark:text-slate-400 mb-6">{error}</p>
-          <div className="flex gap-4 justify-center">
-            <button
-              onClick={() => {
-                setError(null);
-                setLoading(true);
-                fetchCourseData();
-              }}
-              className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-xl transition-all duration-300"
-            >
-              Try Again
-            </button>
-            <Link
-              href="/student/courses"
-              className="inline-flex items-center gap-2 px-6 py-3 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 font-semibold rounded-xl transition-all duration-300"
-            >
-              Back to Courses
-            </Link>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!course) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <div className="text-center">
-          <h2 className="text-2xl font-bold mb-2 text-slate-900 dark:text-white">
-            Course Not Found
-          </h2>
-          <p className="text-slate-600 dark:text-slate-400 mb-6">
-            Unable to load course content.
-          </p>
-          <Link
-            href="/courses"
-            className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-xl transition-all duration-300"
-          >
-            Browse Courses
+          <Link href={isAdmin ? `/admin/courses/${id}` : "/student/dashboard"} className="btn mt-8">
+            {isAdmin ? "Add lessons" : "Back to my learning"}
           </Link>
         </div>
-      </div>
+      </SiteFrame>
     );
   }
 
-  // Check if course has lessons
-  if (!course.lessons || course.lessons.length === 0) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <div className="text-center max-w-md">
-          <div className="w-16 h-16 bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <BookOpen className="w-8 h-8 text-blue-600 dark:text-blue-400" />
-          </div>
-          <h2 className="text-2xl font-bold mb-2 text-slate-900 dark:text-white">
-            No Lessons Available
-          </h2>
-          <p className="text-slate-600 dark:text-slate-400 mb-6">
-            This course doesn't have any lessons yet. Please check back later.
-          </p>
-          <Link
-            href="/student/courses"
-            className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-xl transition-all duration-300"
-          >
-            Back to My Courses
-          </Link>
-        </div>
-      </div>
-    );
+  const positions: Record<string, number> = {};
+  if (enrollment) {
+    const records = await (await getDb())
+      .collection("progress")
+      .find({ userId: toObjectId(user.id)!, courseId: doc._id })
+      .toArray();
+    for (const r of records) {
+      // Don't resume a finished lesson from its last second.
+      if (!r.completed && r.lastPosition > 0) positions[String(r.lessonId)] = Number(r.lastPosition);
+    }
   }
 
-  if (!currentLesson) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
-      </div>
-    );
-  }
-
-  // Find next/prev lesson IDs
-  const currentIndex = course.lessons.findIndex(
-    (l) => l._id?.toString() === currentLesson._id?.toString(),
-  );
-  const nextLessonId =
-    currentIndex < course.lessons.length - 1
-      ? course.lessons[currentIndex + 1]._id?.toString()
-      : undefined;
-  const prevLessonId =
-    currentIndex > 0
-      ? course.lessons[currentIndex - 1]._id?.toString()
-      : undefined;
+  const done = new Set(enrollment?.completedLessons || []);
+  const start =
+    course.lessons.find((l) => l.id === requested) ||
+    course.lessons.find((l) => !done.has(l.id)) ||
+    course.lessons[0];
 
   return (
-    <div className="h-screen flex flex-col bg-slate-50 dark:bg-slate-950 overflow-hidden">
-      {/* Mobile Header */}
-      <div className="md:hidden bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 p-4 flex items-center justify-between z-20">
-        <h1 className="font-bold truncate mr-4 text-slate-900 dark:text-white">
-          {course.title}
-        </h1>
-        <button
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-          className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
-        >
-          {sidebarOpen ? (
-            <X className="w-6 h-6" />
-          ) : (
-            <Menu className="w-6 h-6" />
-          )}
-        </button>
-      </div>
-
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Sidebar */}
-        <div
-          className={`absolute md:relative z-10 h-full transition-transform duration-300 transform ${
-            sidebarOpen
-              ? "translate-x-0"
-              : "-translate-x-full md:translate-x-0 md:w-0 md:overflow-hidden"
-          } md:translate-x-0`}
-        >
-          <div
-            className={`${sidebarOpen ? "w-80" : "w-0"} h-full transition-all duration-300 overflow-hidden`}
-          >
-            <CourseSidebar
-              courseId={courseId}
-              lessons={course.lessons}
-              currentLessonId={currentLesson._id?.toString() || ""}
-              completedLessonIds={completedLessons}
-              title={course.title}
-            />
-          </div>
-        </div>
-
-        {/* Main Content */}
-        <div className="flex-1 flex flex-col min-w-0 relative">
-          {/* Desktop Sidebar Toggle */}
-          <button
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="hidden md:flex absolute top-4 left-4 z-20 bg-white dark:bg-slate-800 p-2 rounded-lg shadow-md border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-            title={sidebarOpen ? "Collapse Sidebar" : "Expand Sidebar"}
-          >
-            {sidebarOpen ? (
-              <X className="w-5 h-5" />
-            ) : (
-              <Menu className="w-5 h-5" />
-            )}
-          </button>
-
-          <LessonContent
-            courseId={courseId}
-            lesson={currentLesson}
-            nextLessonId={nextLessonId}
-            prevLessonId={prevLessonId}
-            onComplete={handleLessonComplete}
-            isCompleted={completedLessons.includes(
-              currentLesson._id?.toString() || "",
-            )}
-            initialProgress={initialProgress}
-          />
-        </div>
-      </div>
-    </div>
+    <LearnClient
+      course={course}
+      enrollmentId={enrollment?.id || null}
+      initialCompleted={enrollment?.completedLessons || []}
+      initialLessonId={start.id}
+      positions={positions}
+      certificateIssued={Boolean(enrollment?.certificateIssued)}
+    />
   );
 }

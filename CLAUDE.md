@@ -1,109 +1,85 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working in this repository.
 
-## Development Commands
+## Commands
 
-- **Development server**: `bun run dev` (uses Turbopack for faster builds)
+- **Dev server**: `bun run dev` (Turbopack)
 - **Build**: `bun run build`
-- **Production start**: `bun start`
+- **Start**: `bun start`
 - **Lint**: `bun run lint`
-- **Initialize database**: `bun run init-db` (runs scripts/init-database.js)
+- **Set up database**: `bun run init-db` — creates indexes and the first admin account; safe to re-run
 
-## Project Architecture
+## What this is
 
-This is a Next.js 15 App Router project with TypeScript, serving as a personal developer portfolio (V-PRO Services) with an admin dashboard and course platform functionality.
+Next.js 15 App Router + TypeScript. One site with three parts:
 
-### Key Architecture Components
+1. **Portfolio** (public) for Victor Ikechukwu / V-PRO Services — `/`, `/about`, `/projects`, `/contact`
+2. **Course platform** (LMS) — `/courses`, `/courses/[id]`, `/courses/[id]/learn`, `/certificates/[id]`, `/student/*`
+3. **Admin back-office** — `/admin/*`
 
-**Authentication System**:
-- NextAuth.js with MongoDB adapter for user management
-- Credentials provider with username/password auth (plain text password for simplicity)
-- JWT session strategy with custom callbacks for role-based access
-- Custom sign-in page at `/auth/signin` redirects to `/admin` on success
-- AuthProvider wraps the entire app in `app/layout.tsx`
-- Role-based system: admin, instructor, student
-
-**Database Integration**:
-- MongoDB connection handled via `lib/mongodb.ts` with connection pooling
-- Development/production mode handling for optimal performance
-- Collections: `users`, `courses`, `enrollments`, `progress`, `payments`
-- Requires `MONGODB_URI` and `NEXTAUTH_SECRET` environment variables
-
-**Course Platform Features**:
-- Course management with lessons, pricing, and enrollment tracking
-- Video player integration with progress tracking
-- Payment processing via Flutterwave integration
-- Student progress tracking and certificate generation
-- Admin dashboard for course and student management
-
-**Layout Structure**:
-- Root layout with AuthProvider and Geist fonts
-- Admin section has dedicated layout (`app/admin/layout.tsx`) with sidebar navigation
-- Admin routes are protected and use custom CSS variables for dark theme
-- Course learning interface with video player and lesson navigation
-
-**Component Organization**:
-- `components/` - Shared components (Navbar, ProjectCard, VideoPlayer, PaymentModal)
-- `components/admin/` - Admin-specific components (Sidebar, StatCard, course management)
-- `app/` - Next.js App Router pages and API routes
-- `lib/models/` - TypeScript interfaces for Course, Enrollment, Progress
-
-**API Routes**:
-- `/api/auth/[...nextauth]` - NextAuth authentication
-- `/api/courses/` - Course CRUD operations
-- `/api/enrollments/` - Student enrollment management
-- `/api/payments/` - Payment processing with Flutterwave
-- `/api/progress/` - Learning progress tracking
-- `/api/projects` - Project management endpoints
-- `/api/signup` - User registration
-
-**Styling**:
-- Tailwind CSS v4 with custom CSS variables for theming
-- Admin dashboard uses dark theme with `var(--secondary-color)` and `var(--text-primary)`
-- Responsive design with mobile-first approach
-
-### Project Structure
+## Where things live
 
 ```
-app/
-├── admin/           # Admin dashboard (courses, students, payments)
-├── api/             # API routes (auth, courses, payments, progress)
-├── auth/            # Authentication pages (signin, signup)
-├── courses/         # Course pages (listing, detail, learning, payment)
-├── (public pages)   # About, contact, projects, etc.
-components/
-├── admin/           # Admin-specific components (Sidebar, forms)
-├── (shared)         # General components (VideoPlayer, PaymentModal)
-lib/
-├── models/          # TypeScript interfaces (Course, Enrollment, etc.)
-├── mongodb.ts       # Database connection
-├── auth.ts          # NextAuth configuration
-├── flutterwave.ts   # Payment processing integration
-├── init-db.ts       # Database initialization
-├── utils.ts         # Utility functions
-scripts/
-└── init-database.js # Database setup script
-types/               # Additional TypeScript type definitions
+lib/site.ts          ALL public copy: name, bio, services, stack, links. Edit copy here, not in pages.
+lib/mongodb.ts       getDb() — one shared connection
+lib/auth.ts          NextAuth credentials config (JWT sessions)
+lib/session.ts       getSessionUser / requirePageUser (pages) / requireAdmin / requireUser (API routes)
+lib/password.ts      scrypt hashing; legacy plain-text passwords are upgraded on next sign-in
+lib/data.ts          Queries + serialisers (Mongo docs -> plain DTOs in lib/types.ts)
+lib/enrollment.ts    enrollUser (idempotent) and recomputeProgress (issues certificates)
+lib/flutterwave.ts   Checkout, verification, fulfilTransaction
+lib/validate.ts      Input cleaning for API routes
+lib/video.ts         parseVideo — YouTube / Vimeo / Drive / file links
+middleware.ts        Guards /admin, /api/admin, /student
+
+components/site/     Public chrome: SiteFrame, SiteHeader, SiteFooter, WorkList, etc.
+components/courses/  CourseCard, EnrollButton, VideoPlayer, LearnClient
+components/dash/     DashShell (shared sidebar for student + admin), PageHeader, forms
+components/admin/    CourseForm, LessonManager, ProjectManager, ConfirmButton (ActionButton)
+app/admin/(panel)/   Admin pages (the route group keeps /admin/signin outside the admin layout)
 ```
 
-## Environment Variables Required
+## Conventions
 
-- `MONGODB_URI` - MongoDB connection string
-- `NEXTAUTH_SECRET` - NextAuth secret for JWT signing
-- `FLUTTERWAVE_PUBLIC_KEY` - Flutterwave payment gateway public key
-- `FLUTTERWAVE_SECRET_KEY` - Flutterwave payment gateway secret key
+- **Pages are Server Components that read the database directly** through `lib/data.ts`. Route
+  handlers under `app/api` exist only for mutations. After a mutation, client components call
+  `router.refresh()`.
+- **Never send lesson `videoUrl`s to someone who isn't enrolled.** `serializeCourse(doc)` strips
+  them by default; pass `{ withVideo: true }` only after checking enrolment or admin role.
+- **Every admin API route starts with `requireAdmin()`**; middleware is a second layer, not the only one.
+- **Payments**: who bought what comes from the `payment_initializations` record matched by
+  `tx_ref`, never from request input. `fulfilTransaction` is idempotent and is called from both
+  the return page and the webhook.
+- **Don't invent content.** No placeholder stats, testimonials or sample courses. Empty states
+  say what's actually true.
 
-## Development Notes
+## Data model (MongoDB)
 
-- Uses Bun as package manager for faster development and builds
-- TypeScript with strict mode enabled and comprehensive type definitions
-- Path alias `@/*` maps to root directory for clean imports
-- MongoDB with proper connection pooling and error handling
-- Role-based authentication system (admin, instructor, student)
-- Course platform with video hosting, payment processing, and progress tracking
-- Flutterwave integration for African market payment processing
-- Plain text password storage (portfolio use case - implement bcrypt in production)
-- Admin dashboard with comprehensive course and student management
-- Responsive design with mobile-first approach using Tailwind CSS v4
-- Image optimization configured for both HTTP and HTTPS sources
+- `users` — admins. `students` — learners. Separate collections; the session `role` says which.
+- `courses` — lessons are embedded (`lessons[]`, each with its own `_id`, `order`, `isPublished`). Prices are in NGN.
+- `enrollments` — one per (userId, courseId); holds `progress`, `completedLessons[]`, `certificate`.
+- `progress` — one per (userId, courseId, lessonId); holds `completed`, `lastPosition`.
+- `payments`, `payment_initializations` — Flutterwave records keyed by `txRef`.
+- `projects` — portfolio items. `messages` — contact form inbox.
+
+## Styling
+
+Tailwind CSS v4. Design tokens are CSS variables in `app/globals.css`, exposed as utilities:
+`bg-bg`, `bg-raised`, `bg-sunk`, `text-ink`, `text-dim`, `border-line`, `border-line-strong`,
+`bg-accent`, `text-on-accent`, `text-ember`, `text-danger`. Dark is the default;
+`[data-theme="light"]` on `<html>` swaps every token. **Use tokens, never raw hex**, so both
+themes keep working.
+
+Shared component classes: `.shell` (page container), `.display` / `.serif-accent` (headline
+type), `.eyebrow`, `.btn` (+ `.btn-primary`, `.btn-sm`, `.btn-icon`, `.btn-danger`), `.field`,
+`.label`, `.hint`, `.panel`, `.tag`, `.notice`, `.table`, `.progress`.
+
+Fonts: Bricolage Grotesque (display), Instrument Serif italic (accent words), Geist (body),
+JetBrains Mono (labels).
+
+## Environment
+
+See `.env.example`. Required: `MONGODB_URI`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`.
+For paid courses: `FLUTTERWAVE_SECRET_KEY`, `FLUTTERWAVE_SECRET_HASH` (webhook).
+Admin → Settings shows which of these are set.

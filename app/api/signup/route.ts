@@ -1,131 +1,60 @@
-import { NextRequest, NextResponse } from 'next/server';
-import clientPromise from '@/lib/mongodb';
-import { Student } from '@/lib/models/student';
+import { getDb } from "@/lib/mongodb";
+import { hashPassword } from "@/lib/password";
+import { allow, clientIp } from "@/lib/rate-limit";
+import { json } from "@/lib/session";
+import { body, EMAIL, text } from "@/lib/validate";
 
-export async function POST(request: NextRequest) {
+export async function POST(request: Request) {
+  if (!allow(`signup:${clientIp(request)}`, 8, 60 * 60 * 1000)) {
+    return json.error("Too many attempts. Please try again later.", 429);
+  }
+
+  const input = await body(request);
+  const username = text(input.username, 30).toLowerCase();
+  const email = text(input.email, 200).toLowerCase();
+  const password = typeof input.password === "string" ? input.password : "";
+  const firstName = text(input.firstName, 60);
+  const lastName = text(input.lastName, 60);
+
+  if (!firstName || !lastName) return json.error("Please enter your first and last name.");
+  if (!/^[a-z0-9_.-]{3,30}$/.test(username)) {
+    return json.error("Usernames are 3–30 characters: letters, numbers, dots, dashes or underscores.");
+  }
+  if (!EMAIL.test(email)) return json.error("That email address doesn't look right.");
+  if (password.length < 8) return json.error("Passwords need at least 8 characters.");
+
   try {
-    const body = await request.json();
-    const {
+    const db = await getDb();
+    const students = db.collection("students");
+    const clash = await students.findOne({ $or: [{ username }, { email }] });
+    if (clash) {
+      return json.error(
+        clash.email === email
+          ? "An account with that email already exists. Try signing in."
+          : "That username is taken.",
+        409
+      );
+    }
+
+    const now = new Date();
+    await students.insertOne({
       username,
       email,
-      password,
-      firstName,
-      lastName,
-      phone,
-      country,
-      dateOfBirth,
-    } = body;
-
-    // Validate required fields
-    if (!username || !email || !password || !firstName || !lastName) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
-    }
-
-    // Validate password length
-    if (password.length < 8) {
-      return NextResponse.json(
-        { error: 'Password must be at least 8 characters long' },
-        { status: 400 }
-      );
-    }
-
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return NextResponse.json(
-        { error: 'Invalid email format' },
-        { status: 400 }
-      );
-    }
-
-    const client = await clientPromise;
-    const db = client.db();
-
-    // Check if username already exists in students collection
-    const existingUsername = await db
-      .collection('students')
-      .findOne({ username: username.toLowerCase() });
-
-    if (existingUsername) {
-      return NextResponse.json(
-        { error: 'Username already taken' },
-        { status: 409 }
-      );
-    }
-
-    // Check if email already exists in students collection
-    const existingEmail = await db
-      .collection('students')
-      .findOne({ email: email.toLowerCase() });
-
-    if (existingEmail) {
-      return NextResponse.json(
-        { error: 'Email already registered' },
-        { status: 409 }
-      );
-    }
-
-    // Create new student
-    const newStudent: Student = {
-      username: username.toLowerCase(),
-      email: email.toLowerCase(),
-      password: password, // In production, use bcrypt to hash passwords
-      role: 'student',
+      password: hashPassword(password),
+      role: "student",
       profile: {
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        phone: phone?.trim() || undefined,
-        country: country?.trim() || undefined,
-        dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : undefined,
+        firstName,
+        lastName,
+        phone: text(input.phone, 30),
+        country: text(input.country, 60),
       },
-      preferences: {
-        notifications: true,
-        emailUpdates: true,
-        language: 'English',
-      },
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    const result = await db
-      .collection('students')
-      .insertOne(newStudent);
-
-    if (!result.insertedId) {
-      return NextResponse.json(
-        { error: 'Failed to create student account' },
-        { status: 500 }
-      );
-    }
-
-    // Remove password from response
-    const { password: _, ...studentWithoutPassword } = newStudent;
-
-    return NextResponse.json({
-      success: true,
-      message: 'Student account created successfully',
-      student: {
-        _id: result.insertedId,
-        ...studentWithoutPassword,
-      },
+      preferences: { notifications: true, emailUpdates: true, language: "English" },
+      createdAt: now,
+      updatedAt: now,
     });
-
+    return json.ok({ success: true }, 201);
   } catch (error) {
-    console.error('Student signup error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    console.error("[signup]", error);
+    return json.error("We couldn't create your account right now. Please try again.", 500);
   }
-}
-
-// Handle other HTTP methods
-export async function GET() {
-  return NextResponse.json(
-    { error: 'Method not allowed' },
-    { status: 405 }
-  );
 }

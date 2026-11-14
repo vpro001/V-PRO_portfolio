@@ -1,94 +1,93 @@
-// lib/auth.ts
 import { NextAuthOptions } from "next-auth";
-import { MongoDBAdapter } from "@next-auth/mongodb-adapter";
-import clientPromise from "@/lib/mongodb";
 import CredentialsProvider from "next-auth/providers/credentials";
+import { getDb } from "@/lib/mongodb";
+import { hashPassword, verifyPassword } from "@/lib/password";
+
+export type Role = "admin" | "student";
+
+/** Admins live in `users`, learners in `students`. */
+export function collectionFor(role: Role) {
+  return role === "admin" ? "users" : "students";
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function displayName(user: Record<string, any>): string {
+  const full = [user.profile?.firstName, user.profile?.lastName].filter(Boolean).join(" ").trim();
+  return full || user.username || "Account";
+}
 
 export const authOptions: NextAuthOptions = {
-  // Use MongoDB to store user, session, and account data
-  adapter: MongoDBAdapter(clientPromise),
-
-  // Configure one or more authentication providers
   providers: [
     CredentialsProvider({
       name: "Credentials",
       credentials: {
-        username: { label: "Username", type: "text" },
+        username: { label: "Username or email", type: "text" },
         password: { label: "Password", type: "password" },
-        userType: { label: "User Type", type: "text" } // Hidden field for role distinction
+        userType: { label: "User type", type: "text" },
       },
       async authorize(credentials) {
-        if (!credentials?.username || !credentials.password) {
-          return null;
-        }
+        const identifier = credentials?.username?.trim();
+        const password = credentials?.password;
+        if (!identifier || !password) return null;
 
-        const client = await clientPromise;
-        const db = client.db();
+        const role: Role = credentials?.userType === "admin" ? "admin" : "student";
+        const db = await getDb();
+        const users = db.collection(collectionFor(role));
+        const lower = identifier.toLowerCase();
 
-        // Check which collection to query based on user type
-        const userType = credentials.userType as string;
-        const collection = userType === "admin" ? "users" : "students";
+        const user = await users.findOne({
+          $or: [{ username: identifier }, { username: lower }, { email: lower }],
+        });
+        if (!user) return null;
 
-        const user = await db
-          .collection(collection)
-          .findOne({ username: credentials.username });
+        const check = verifyPassword(password, user.password);
+        if (!check.ok) return null;
 
-        // In production, use proper password hashing
-        // const passwordsMatch = await bcrypt.compare(credentials.password, user.password);
-        const passwordsMatch = user && user.password === credentials.password;
+        await users.updateOne(
+          { _id: user._id },
+          {
+            $set: {
+              lastLoginAt: new Date(),
+              ...(check.needsUpgrade ? { password: hashPassword(password) } : {}),
+            },
+          }
+        );
 
-        if (passwordsMatch) {
-          // Return a user object that NextAuth can use
-          return {
-            id: user._id.toString(),
-            username: user.username,
-            email: user.email,
-            role: userType === "admin" ? "admin" : "student",
-            name: user.profile?.firstName || user.username,
-          };
-        }
-
-        return null;
+        return {
+          id: user._id.toString(),
+          username: user.username,
+          email: user.email,
+          role,
+          name: displayName(user),
+        };
       },
     }),
   ],
-
-  // Use JWT for session management
-  session: {
-    strategy: "jwt",
-  },
-
-  // Callbacks are used to control what happens when an action is performed.
+  session: { strategy: "jwt", maxAge: 60 * 60 * 24 * 14 },
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger, session }) {
       if (user) {
-        // When a user signs in, add their ID, username, and role to the token
         token.id = user.id;
-        token.username = (user as any).username;
-        token.role = (user as any).role;
-        token.email = (user as any).email;
-        token.name = (user as any).name;
+        token.role = user.role;
+        token.username = (user as { username?: string }).username;
+        token.name = user.name;
+        token.email = user.email;
       }
+      // Lets the profile page refresh the displayed name without signing out.
+      if (trigger === "update" && session?.name) token.name = session.name;
       return token;
     },
     async session({ session, token }) {
-      // Add the user's ID, username, and role to the session object
       if (session.user) {
-        (session.user as any).id = token.id;
-        (session.user as any).username = token.username;
-        (session.user as any).role = token.role;
-        (session.user as any).email = token.email;
-        (session.user as any).name = token.name;
+        session.user.id = token.id;
+        session.user.role = token.role;
+        session.user.username = token.username;
+        session.user.name = token.name;
+        session.user.email = token.email;
       }
       return session;
     },
   },
-
-  // Specify a custom sign-in page
-  pages: {
-    signIn: "/auth/signin",
-  },
-
-  // Your secret for signing the JWT
+  pages: { signIn: "/auth/signin" },
   secret: process.env.NEXTAUTH_SECRET,
 };

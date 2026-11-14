@@ -1,78 +1,32 @@
-import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
-import clientPromise from "@/lib/mongodb";
+import { enrollUser } from "@/lib/enrollment";
+import { getDb } from "@/lib/mongodb";
+import { json, requireAdmin, toObjectId } from "@/lib/session";
+import { body, text } from "@/lib/validate";
 
-export async function GET() {
+/** Give a student access by hand — for bank transfers, scholarships, etc. */
+export async function POST(request: Request) {
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+
+  const input = await body(request);
+  const courseId = toObjectId(input.courseId);
+  const who = text(input.student, 200).toLowerCase();
+  if (!courseId || !who) return json.error("Choose a course and enter the student's email or username.");
+
   try {
-    const session = await getServerSession(authOptions);
+    const db = await getDb();
+    const [course, student] = await Promise.all([
+      db.collection("courses").findOne({ _id: courseId }),
+      db.collection("students").findOne({ $or: [{ email: who }, { username: who }] }),
+    ]);
+    if (!course) return json.error("Course not found.", 404);
+    if (!student) return json.error("No student account matches that email or username.", 404);
 
-    if (!session || (session.user as any).role !== "admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const client = await clientPromise;
-    const db = client.db();
-
-    // Fetch all enrollments with student and course details
-    const enrollments = await db.collection("enrollments")
-      .aggregate([
-        {
-          $lookup: {
-            from: "students",
-            localField: "userId",
-            foreignField: "_id",
-            as: "student"
-          }
-        },
-        {
-          $lookup: {
-            from: "courses",
-            localField: "courseId",
-            foreignField: "_id",
-            as: "course"
-          }
-        },
-        {
-          $unwind: "$student"
-        },
-        {
-          $unwind: "$course"
-        },
-        {
-          $project: {
-            _id: 1,
-            studentName: {
-              $concat: [
-                { $ifNull: ["$student.profile.firstName", ""] },
-                " ",
-                { $ifNull: ["$student.profile.lastName", ""] }
-              ]
-            },
-            studentEmail: "$student.email",
-            courseTitle: "$course.title",
-            progress: 1,
-            enrolledAt: 1,
-            lastAccessedAt: 1,
-            completedLessons: { $size: { $ifNull: ["$completedLessons", []] } }
-          }
-        },
-        {
-          $sort: { enrolledAt: -1 }
-        }
-      ])
-      .toArray();
-
-    return NextResponse.json({
-      success: true,
-      enrollments
-    });
-
+    const { created } = await enrollUser(db, student._id, courseId, { grantedBy: admin.username });
+    if (!created) return json.error("That student is already enrolled in this course.", 409);
+    return json.ok({ success: true }, 201);
   } catch (error) {
-    console.error("Error fetching enrollments:", error);
-    return NextResponse.json(
-      { error: "Internal Server Error" },
-      { status: 500 }
-    );
+    console.error("[admin/enrollments]", error);
+    return json.error("The enrolment couldn't be created.", 500);
   }
 }

@@ -1,131 +1,105 @@
-"use client";
-
-import { useEffect, useState } from "react";
-import { useRouter, useSearchParams, useParams } from "next/navigation";
+import { ArrowRight, Check, X } from "lucide-react";
+import type { Metadata } from "next";
 import Link from "next/link";
-import { CheckCircle2, Loader2, AlertCircle } from "lucide-react";
+import SiteFrame from "@/components/site/SiteFrame";
+import { fulfilTransaction, paymentsConfigured, verifyById, verifyByReference } from "@/lib/flutterwave";
+import { getDb } from "@/lib/mongodb";
 
-export default function PaymentSuccessPage() {
-  const router = useRouter();
-  const params = useParams();
-  const searchParams = useSearchParams();
-  const [status, setStatus] = useState<"loading" | "success" | "error">(
-    "loading",
-  );
-  const [message, setMessage] = useState("Verifying payment...");
+export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Payment", robots: { index: false } };
 
-  const courseId = params.id as string;
-  const statusParam = searchParams.get("status");
-  const txRef = searchParams.get("tx_ref");
-  const transactionId = searchParams.get("transaction_id");
+type Props = {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ status?: string; tx_ref?: string; transaction_id?: string }>;
+};
 
-  useEffect(() => {
-    const verifyPayment = async () => {
-      // If we have a transaction_id, verify it with the backend
-      if (transactionId) {
-        try {
-          const response = await fetch("/api/payments/verify", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              transactionId,
-              txRef,
-            }),
-          });
+/**
+ * Flutterwave sends buyers back here. Nothing in the URL is trusted: we ask
+ * Flutterwave what happened to the transaction and enrol only if it was paid.
+ */
+async function settle(query: Awaited<Props["searchParams"]>): Promise<{ ok: boolean; message: string }> {
+  if (query.status === "cancelled") {
+    return { ok: false, message: "You cancelled the payment. Nothing was charged." };
+  }
+  if (!paymentsConfigured()) {
+    return { ok: false, message: "Payments aren't configured on this site yet." };
+  }
+  if (!query.transaction_id && !query.tx_ref) {
+    return { ok: false, message: "We didn't receive a payment reference." };
+  }
 
-          if (response.ok) {
-            setStatus("success");
-            setMessage("Payment verified! You are now enrolled.");
-          } else {
-            console.error("Payment verification failed");
-            setStatus("success");
-            setMessage("Payment processed! You are now enrolled."); // Fallback if verification fails but they were charged
-          }
-        } catch (error) {
-          console.error("Error verifying payment:", error);
-          setStatus("success");
-          setMessage("Payment processed! You are now enrolled.");
-        }
-      }
-      // Handle cancelled payment
-      else if (statusParam === "cancelled") {
-        setStatus("error");
-        setMessage("Payment was cancelled.");
-      } else if (
-        statusParam === "successful" ||
-        statusParam === "completed" ||
-        txRef
-      ) {
-        setStatus("success");
-        setMessage("Payment successful! You are now enrolled.");
-      } else {
-        // If no status param, it might be a direct visit or free course enrollment
-        setStatus("success");
-        setMessage("You are now enrolled in this course.");
-      }
+  try {
+    const tx =
+      (query.transaction_id && (await verifyById(query.transaction_id))) ||
+      (query.tx_ref && (await verifyByReference(query.tx_ref))) ||
+      null;
+    if (!tx) {
+      return {
+        ok: false,
+        message:
+          "We couldn't confirm this payment with Flutterwave yet. If you were charged, your access will be activated automatically within a few minutes.",
+      };
+    }
+    const result = await fulfilTransaction(await getDb(), tx);
+    return result.ok
+      ? { ok: true, message: "Your payment is confirmed and you're enrolled." }
+      : { ok: false, message: result.reason };
+  } catch (error) {
+    console.error("[payment/success]", error);
+    return {
+      ok: false,
+      message:
+        "Something went wrong while confirming your payment. If you were charged, your access will be activated automatically — or contact me and I'll sort it out.",
     };
+  }
+}
 
-    verifyPayment();
-  }, [statusParam, txRef, transactionId]);
+export default async function PaymentResultPage({ params, searchParams }: Props) {
+  const { id } = await params;
+  const outcome = await settle(await searchParams);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 flex items-center justify-center p-6">
-      <div className="max-w-md w-full bg-white dark:bg-slate-900 rounded-3xl shadow-xl p-8 text-center border border-slate-200 dark:border-slate-800">
-        {status === "loading" && (
-          <div className="flex flex-col items-center">
-            <div className="w-20 h-20 bg-indigo-100 dark:bg-indigo-900/30 rounded-full flex items-center justify-center mb-6">
-              <Loader2 className="w-10 h-10 text-indigo-600 dark:text-indigo-400 animate-spin" />
-            </div>
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">
-              Verifying Payment
-            </h1>
-            <p className="text-slate-600 dark:text-slate-400">
-              Please wait while we confirm your enrollment...
-            </p>
-          </div>
-        )}
-
-        {status === "success" && (
-          <div className="flex flex-col items-center animate-fade-in">
-            <div className="w-20 h-20 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mb-6">
-              <CheckCircle2 className="w-10 h-10 text-green-600 dark:text-green-400" />
-            </div>
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">
-              Enrollment Successful!
-            </h1>
-            <p className="text-slate-600 dark:text-slate-400 mb-8">{message}</p>
-            <Link
-              href={`/courses/${courseId}`}
-              className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-4 px-6 rounded-xl font-bold text-lg hover:shadow-lg hover:-translate-y-1 transition-all flex items-center justify-center gap-2"
-            >
-              Start Learning
+    <SiteFrame cta={false}>
+      <div className="shell flex min-h-[70dvh] flex-col justify-center py-20">
+        <span
+          className={`flex h-14 w-14 items-center justify-center rounded-full ${
+            outcome.ok ? "bg-accent text-on-accent" : "border border-danger text-danger"
+          }`}
+        >
+          {outcome.ok ? <Check className="h-7 w-7" aria-hidden="true" /> : <X className="h-7 w-7" aria-hidden="true" />}
+        </span>
+        <h1 className="display mt-8 text-[clamp(3rem,9vw,8rem)]">
+          {outcome.ok ? (
+            <>
+              You&rsquo;re <span className="serif-accent text-accent">in</span>
+            </>
+          ) : (
+            <>
+              Not <span className="serif-accent text-ember">quite</span>
+            </>
+          )}
+        </h1>
+        <p className="mt-6 max-w-xl text-lg text-dim md:text-xl" role="status">
+          {outcome.message}
+        </p>
+        <div className="mt-10 flex flex-wrap gap-3">
+          {outcome.ok ? (
+            <Link href={`/courses/${id}/learn`} className="btn btn-primary">
+              Start learning
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
             </Link>
-          </div>
-        )}
-
-        {status === "error" && (
-          <div className="flex flex-col items-center">
-            <div className="w-20 h-20 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center mb-6">
-              <AlertCircle className="w-10 h-10 text-red-600 dark:text-red-400" />
-            </div>
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">
-              Something went wrong
-            </h1>
-            <p className="text-slate-600 dark:text-slate-400 mb-8">
-              We couldn't verify your payment. Please contact support if you
-              were charged.
-            </p>
-            <Link
-              href={`/courses/${courseId}`}
-              className="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline"
-            >
-              Return to Course
-            </Link>
-          </div>
-        )}
+          ) : (
+            <>
+              <Link href={`/courses/${id}`} className="btn btn-primary">
+                Back to the course
+              </Link>
+              <Link href="/contact" className="btn">
+                Contact support
+              </Link>
+            </>
+          )}
+        </div>
       </div>
-    </div>
+    </SiteFrame>
   );
 }

@@ -1,82 +1,66 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import clientPromise from "@/lib/mongodb";
-import { ObjectId } from "mongodb";
+import { Document } from "mongodb";
+import { findCourse } from "@/lib/data";
+import { getDb } from "@/lib/mongodb";
+import { json, requireAdmin } from "@/lib/session";
+import { body, lessonFields, newId } from "@/lib/validate";
 
-// GET all lessons for a course
-export async function GET(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+type Ctx = { params: Promise<{ id: string }> };
+
+/** Add a lesson to the end of the course. */
+export async function POST(request: Request, { params }: Ctx) {
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+
+  const fields = lessonFields(await body(request));
+  if (!fields.title) return json.error("Give the lesson a title.");
+
   try {
-    const session = await getServerSession(authOptions);
-    if (!session || session.user.role !== "admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const course = await findCourse((await params).id);
+    if (!course) return json.error("Course not found.", 404);
 
-    const { id } = await params;
-    const client = await clientPromise;
-    const db = client.db();
-
-    const course = await db.collection("courses").findOne({ _id: new ObjectId(id) });
-
-    if (!course) {
-      return NextResponse.json({ error: "Course not found" }, { status: 404 });
-    }
-
-    return NextResponse.json({ lessons: course.lessons || [] });
+    const lessons: Document[] = course.lessons || [];
+    const lesson = {
+      _id: newId(),
+      ...fields,
+      order: lessons.reduce((max, l) => Math.max(max, Number(l.order) || 0), 0) + 1,
+    };
+    await (await getDb())
+      .collection("courses")
+      .updateOne({ _id: course._id }, { $set: { lessons: [...lessons, lesson], updatedAt: new Date() } });
+    return json.ok({ id: String(lesson._id) }, 201);
   } catch (error) {
-    console.error("Error fetching lessons:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    console.error("[admin/lessons]", error);
+    return json.error("The lesson couldn't be added.", 500);
   }
 }
 
-// POST create a new lesson
-export async function POST(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+/** Reorder: body is `{ order: [lessonId, lessonId, ...] }`. */
+export async function PUT(request: Request, { params }: Ctx) {
+  const admin = await requireAdmin();
+  if (admin instanceof Response) return admin;
+
+  const order = (await body(request)).order;
+  if (!Array.isArray(order)) return json.error("Expected a list of lesson ids.");
+
   try {
-    const session = await getServerSession(authOptions);
-    if (!session || session.user.role !== "admin") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const course = await findCourse((await params).id);
+    if (!course) return json.error("Course not found.", 404);
 
-    const { id } = await params;
-    const lessonData = await req.json();
-    
-    const client = await clientPromise;
-    const db = client.db();
+    const position = new Map(order.map((id, index) => [String(id), index]));
+    const lessons = [...(course.lessons as Document[])]
+      .sort(
+        (a, b) =>
+          (position.get(String(a._id)) ?? 1e6 + (Number(a.order) || 0)) -
+          (position.get(String(b._id)) ?? 1e6 + (Number(b.order) || 0))
+      )
+      .map((lesson, index) => ({ ...lesson, order: index + 1 }));
 
-    // Create new lesson with ObjectId
-    const newLesson = {
-      _id: new ObjectId(),
-      title: lessonData.title,
-      description: lessonData.description,
-      videoUrl: lessonData.videoUrl,
-      duration: lessonData.duration || 0,
-      order: lessonData.order,
-      isPublished: lessonData.isPublished || false,
-      resources: lessonData.resources || [],
-    };
-
-    // Add lesson to course
-    const result = await db.collection("courses").updateOne(
-      { _id: new ObjectId(id) },
-      { 
-        $push: { lessons: newLesson } as any,
-        $set: { updatedAt: new Date() }
-      }
-    );
-
-    if (result.matchedCount === 0) {
-      return NextResponse.json({ error: "Course not found" }, { status: 404 });
-    }
-
-    return NextResponse.json({ success: true, lesson: newLesson });
+    await (await getDb())
+      .collection("courses")
+      .updateOne({ _id: course._id }, { $set: { lessons, updatedAt: new Date() } });
+    return json.ok({ success: true });
   } catch (error) {
-    console.error("Error creating lesson:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    console.error("[admin/lessons]", error);
+    return json.error("The lessons couldn't be reordered.", 500);
   }
 }

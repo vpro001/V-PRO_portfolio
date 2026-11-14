@@ -1,36 +1,41 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# V-PRO — portfolio & course platform
 
-## Getting Started
+The personal site of Victor Ikechukwu: a portfolio, a course platform with Flutterwave
+payments and verifiable certificates, and an admin back-office. Next.js 15, TypeScript,
+Tailwind CSS v4, MongoDB, NextAuth.
 
-First, run the development server:
+## Getting started
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun install
+cp .env.example .env.local   # then fill in MONGODB_URI and NEXTAUTH_SECRET
+bun run init-db              # creates indexes + your admin account (prints the password once)
+bun run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000. Sign in to the back-office at `/admin/signin`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Day to day
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| I want to…                         | Where                                                        |
+| ---------------------------------- | ------------------------------------------------------------ |
+| Change my bio, services, links     | `lib/site.ts`                                                |
+| Add or edit portfolio projects     | Admin → Projects (tick “Feature on the homepage”)            |
+| Create a course and add lessons    | Admin → Courses → New course                                 |
+| Enrol someone who paid by transfer | Admin → Enrolments → Grant access manually                   |
+| Read contact-form messages         | Admin → Messages                                             |
+| Check payments are configured      | Admin → Settings → Setup checklist                           |
 
-## Learn More
+Lesson videos can be YouTube (unlisted is fine), Vimeo, Google Drive, or a direct `.mp4` link.
 
-To learn more about Next.js, take a look at the following resources:
+## Taking payments
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Put your Flutterwave **secret key** in `FLUTTERWAVE_SECRET_KEY`.
+2. In the Flutterwave dashboard, add a webhook pointing at
+   `https://YOUR-DOMAIN/api/payments/webhook`, choose a secret hash, and put the same value in
+   `FLUTTERWAVE_SECRET_HASH`.
+3. Set `NEXTAUTH_URL` to your live address so buyers are sent back to the right place.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Every payment is verified with Flutterwave on the server before a student is enrolled.
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See `CLAUDE.md` for how the code is organised.

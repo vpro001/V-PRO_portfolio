@@ -1,43 +1,42 @@
-import { withAuth } from "next-auth/middleware";
-import { NextResponse } from "next/server";
+import { getToken } from "next-auth/jwt";
+import { NextRequest, NextResponse } from "next/server";
 
-export default withAuth(
-  function middleware(req) {
-    // Don't interfere with NextAuth's own API routes
-    if (req.nextUrl.pathname.startsWith("/api/auth")) {
-      return NextResponse.next();
+export async function middleware(req: NextRequest) {
+  const { pathname, search } = req.nextUrl;
+  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+  const role = token?.role;
+
+  const toSignIn = (path: string) => {
+    const url = new URL(path, req.url);
+    url.searchParams.set("callbackUrl", pathname + search);
+    return NextResponse.redirect(url);
+  };
+
+  if (pathname.startsWith("/api/admin")) {
+    if (role !== "admin") {
+      return NextResponse.json(
+        { error: token ? "Admin access required" : "Sign in required" },
+        { status: token ? 403 : 401 }
+      );
     }
-
-    // Check if accessing admin routes (but not the signin page itself)
-    if (req.nextUrl.pathname.startsWith("/admin") && !req.nextUrl.pathname.startsWith("/admin/signin")) {
-      const token = req.nextauth.token;
-
-      // Check if user is authenticated and has admin role
-      if (!token || token.role !== "admin") {
-        // Redirect to admin sign in page if not authenticated or not admin
-        const signInUrl = new URL("/admin/signin", req.url);
-        signInUrl.searchParams.set("callbackUrl", req.url);
-        return NextResponse.redirect(signInUrl);
-      }
-    }
-
     return NextResponse.next();
-  },
-  {
-    callbacks: {
-      authorized: ({ token }) => {
-        // Don't block access to sign-in page or public pages
-        return true;
-      },
-    },
   }
-);
+
+  if (pathname.startsWith("/admin")) {
+    if (pathname === "/admin/signin") {
+      return role === "admin" ? NextResponse.redirect(new URL("/admin", req.url)) : NextResponse.next();
+    }
+    return role === "admin" ? NextResponse.next() : toSignIn("/admin/signin");
+  }
+
+  if (pathname.startsWith("/student")) {
+    if (role === "admin") return NextResponse.redirect(new URL("/admin", req.url));
+    return role === "student" ? NextResponse.next() : toSignIn("/auth/signin");
+  }
+
+  return NextResponse.next();
+}
 
 export const config = {
-  matcher: [
-    // Match admin routes
-    "/admin/:path*",
-    // Match admin API routes (but not NextAuth's own routes)
-    "/api/admin/:path*",
-  ],
+  matcher: ["/admin/:path*", "/api/admin/:path*", "/student/:path*"],
 };
