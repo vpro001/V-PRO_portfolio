@@ -3,6 +3,7 @@ import localFont from "next/font/local";
 import "./globals.css";
 import AuthProvider from "@/components/AuthProvider";
 import { site } from "@/lib/site";
+import { Analytics } from "@vercel/analytics/next"
 
 const display = localFont({
   src: "../public/fonts/bricolage-grotesque.ttf",
@@ -116,6 +117,7 @@ export default function RootLayout({
           Skip to content
         </a>
         <AuthProvider>{children}</AuthProvider>
+        <Analytics />
       </body>
     </html>
   );
